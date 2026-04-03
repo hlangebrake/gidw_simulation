@@ -139,6 +139,7 @@
       motionDetected: false,
       motionCheckTimer: null,
       motionFilter: { x: 0, y: 0, z: 0 },
+      linearAcceleration: { x: 0, y: 0 },
       tilt: { x: 0, y: 0 },
       arrow: { x: 0, y: 0 },
       ball: {
@@ -244,7 +245,9 @@
     }
 
     function handleDeviceMotion(event) {
-      const source = event.accelerationIncludingGravity || event.acceleration;
+      const gravitySource = event.accelerationIncludingGravity || event.acceleration;
+      const linearSource = event.acceleration;
+      const source = gravitySource || linearSource;
       if (!source) {
         return;
       }
@@ -260,11 +263,9 @@
         setSensorStatus("Bewegungssensoren sind aktiv.", false);
       }
 
-      const rawX = source.x ?? 0;
-      const rawY = source.y ?? 0;
-      const rawZ = source.z ?? 0;
-
-      const mappedGravity = mapAccelerationToScreenAxes(rawX, rawY);
+      const rawGravityX = gravitySource?.x ?? source.x ?? 0;
+      const rawGravityY = gravitySource?.y ?? source.y ?? 0;
+      const mappedGravity = mapAccelerationToScreenAxes(rawGravityX, rawGravityY);
       const gravityVector = {
         x: clamp(mappedGravity.x / 9.81, -1, 1),
         y: clamp(mappedGravity.y / 9.81, -1, 1)
@@ -273,9 +274,20 @@
       smoothVector(state.motionFilter, { x: gravityVector.x, y: gravityVector.y }, 0.16);
       smoothVector(state.tilt, state.motionFilter, 0.18);
 
+      let mappedLinear;
+      if (linearSource && (linearSource.x !== null || linearSource.y !== null)) {
+        mappedLinear = mapAccelerationToScreenAxes(linearSource.x ?? 0, linearSource.y ?? 0);
+      } else {
+        mappedLinear = {
+          x: (gravityVector.x - state.tilt.x) * 9.81,
+          y: (gravityVector.y - state.tilt.y) * 9.81
+        };
+      }
+
+      smoothVector(state.linearAcceleration, mappedLinear, 0.22);
       const arrowTarget = {
-        x: clamp(state.tilt.x * 1.1, -1.2, 1.2),
-        y: clamp(state.tilt.y * 1.1, -1.2, 1.2)
+        x: clamp(state.linearAcceleration.x / 6, -1.2, 1.2),
+        y: clamp(state.linearAcceleration.y / 6, -1.2, 1.2)
       };
       smoothVector(state.arrow, arrowTarget, 0.28);
 
@@ -459,14 +471,16 @@
         ball.y += normal.y * penetration;
 
         const velocityAlongNormal = ball.vx * normal.x + ball.vy * normal.y;
-        const velocityAlongTangent = ball.vx * tangent.x + ball.vy * tangent.y;
+        let velocityAlongTangent = ball.vx * tangent.x + ball.vy * tangent.y;
+        const slopeAcceleration = state.gravity * tangent.y;
 
         if (velocityAlongNormal < -20) {
           const bouncedNormal = -velocityAlongNormal * state.bounce;
-          const dampedTangent = velocityAlongTangent * 0.992;
+          const dampedTangent = velocityAlongTangent * 0.992 + slopeAcceleration * dt;
           ball.vx = tangent.x * dampedTangent + normal.x * bouncedNormal;
           ball.vy = tangent.y * dampedTangent + normal.y * bouncedNormal;
         } else {
+          velocityAlongTangent += slopeAcceleration * dt;
           let rolledTangent = velocityAlongTangent * state.rollingFriction;
           if (Math.abs(rolledTangent) < 1.5) {
             rolledTangent = 0;
