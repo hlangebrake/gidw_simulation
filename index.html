@@ -7,8 +7,8 @@
   <style>
     :root {
       color-scheme: dark;
-      --bg-top: #2a1635;
-      --bg-bottom: #152b46;
+      --bg-top: #5a4712;
+      --bg-bottom: #7a6120;
       --floor-top: #5c677d;
       --floor-bottom: #2f3b52;
       --ball-fill: #f4a261;
@@ -196,7 +196,7 @@
     function getFloorNormal() {
       const slope = getFloorSlope();
       const length = Math.hypot(slope, 1);
-      return { x: -slope / length, y: -1 / length };
+      return { x: slope / length, y: -1 / length };
     }
 
     function getFloorTangent() {
@@ -473,29 +473,28 @@
         const velocityAlongNormal = ball.vx * normal.x + ball.vy * normal.y;
         let velocityAlongTangent = ball.vx * tangent.x + ball.vy * tangent.y;
         const slopeAcceleration = state.gravity * tangent.y;
+        let nextNormalVelocity = 0;
 
         if (velocityAlongNormal < -20) {
-          const bouncedNormal = -velocityAlongNormal * state.bounce;
-          const dampedTangent = velocityAlongTangent * 0.992 + slopeAcceleration * dt;
-          ball.vx = tangent.x * dampedTangent + normal.x * bouncedNormal;
-          ball.vy = tangent.y * dampedTangent + normal.y * bouncedNormal;
-        } else {
-          velocityAlongTangent += slopeAcceleration * dt;
-          let rolledTangent = velocityAlongTangent * state.rollingFriction;
-          if (Math.abs(rolledTangent) < 1.5) {
-            rolledTangent = 0;
-          }
-          ball.vx = tangent.x * rolledTangent;
-          ball.vy = tangent.y * rolledTangent;
+          nextNormalVelocity = -velocityAlongNormal * state.bounce;
         }
+
+        velocityAlongTangent += slopeAcceleration * dt;
+        velocityAlongTangent *= state.rollingFriction;
+        if (Math.abs(velocityAlongTangent) < 1.5 && Math.abs(slopeAcceleration) < 18) {
+          velocityAlongTangent = 0;
+        }
+
+        ball.vx = tangent.x * velocityAlongTangent + normal.x * nextNormalVelocity;
+        ball.vy = tangent.y * velocityAlongTangent + normal.y * nextNormalVelocity;
       }
     }
 
     function drawBackground() {
       const sky = ctx.createLinearGradient(0, 0, 0, state.height);
-      sky.addColorStop(0, "#2c1738");
-      sky.addColorStop(0.65, "#24395f");
-      sky.addColorStop(1, "#16506a");
+      sky.addColorStop(0, "#6b5417");
+      sky.addColorStop(0.65, "#9d7c1f");
+      sky.addColorStop(1, "#c6a43a");
       ctx.fillStyle = sky;
       ctx.fillRect(0, 0, state.width, state.height);
 
