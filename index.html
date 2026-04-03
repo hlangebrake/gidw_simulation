@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>2D Kugelphysik</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg-top: #0d1b2a;
+      --bg-bottom: #1b263b;
+      --floor-top: #5c677d;
+      --floor-bottom: #2f3b52;
+      --ball-fill: #f4a261;
+      --ball-shadow: rgba(0, 0, 0, 0.28);
+      --text: rgba(255, 255, 255, 0.9);
+      --hint: rgba(255, 255, 255, 0.6);
+    }
+
+    * {
+      box-sizing: border-box;
+      touch-action: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    html,
+    body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      overscroll-behavior: none;
+      background: linear-gradient(180deg, var(--bg-top), var(--bg-bottom));
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+    }
+
+    body {
+      position: fixed;
+      inset: 0;
+    }
+
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      cursor: grab;
+    }
+
+    canvas.dragging {
+      cursor: grabbing;
+    }
+
+    .hud {
+      position: fixed;
+      top: 18px;
+      left: 18px;
+      z-index: 1;
+      padding: 12px 14px;
+      border-radius: 14px;
+      background: rgba(13, 27, 42, 0.42);
+      backdrop-filter: blur(10px);
+      color: var(--text);
+      user-select: none;
+      pointer-events: none;
+      max-width: min(360px, calc(100vw - 36px));
+    }
+
+    .hud strong {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    .hud span {
+      display: block;
+      color: var(--hint);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .hud button,
+    .hud .sensor-status {
+      margin-top: 10px;
+      pointer-events: auto;
+    }
+
+    .hud button {
+      border: 0;
+      border-radius: 999px;
+      padding: 10px 14px;
+      background: rgba(244, 162, 97, 0.92);
+      color: #10253d;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .hud button[hidden] {
+      display: none;
+    }
+
+    .hud .sensor-status {
+      color: rgba(255, 255, 255, 0.78);
+      font-size: 12px;
+      min-height: 1.2em;
+    }
+  </style>
+</head>
+<body>
+  <div class="hud">
+    <strong>2D Kugelphysik</strong>
+    <span>Kugel greifen, ziehen und loslassen. Danach wirken Schwerkraft, Boden und D&auml;mpfung.</span>
+    <button id="sensorButton" type="button">Bewegungssensoren aktivieren</button>
+    <div id="sensorStatus" class="sensor-status">Sensoren sind noch nicht aktiviert.</div>
+  </div>
+  <canvas id="scene" aria-label="Physiksimulation einer Kugel"></canvas>
+
+  <script>
+    const canvas = document.getElementById("scene");
+    const ctx = canvas.getContext("2d");
+    const sensorButton = document.getElementById("sensorButton");
+    const sensorStatus = document.getElementById("sensorStatus");
+
+    const state = {
+      width: 0,
+      height: 0,
+      floorHeight: 88,
+      lastTime: performance.now(),
+      gravity: 1800,
+      airDrag: 0.0008,
+      bounce: 0.52,
+      rollingFriction: 0.985,
+      sensorForce: 900,
+      sensorDamping: 0.92,
+      motionReady: false,
+      motionListening: false,
+      motionDetected: false,
+      motionCheckTimer: null,
+      motionVelocity: { x: 0, y: 0 },
+      motionFilter: { x: 0, y: 0, z: 0 },
+      motionBias: { x: 0, y: 0 },
+      ball: {
+        radius: 34,
+        x: 0,
+        y: 0,
+        vx: 0,
+        vy: 0,
+        dragged: false,
+        pointerId: null,
+        dragOffsetX: 0,
+        dragOffsetY: 0,
+        history: []
+      }
+    };
+
+    function resize() {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      state.width = window.innerWidth;
+      state.height = window.innerHeight;
+      canvas.width = Math.round(state.width * dpr);
+      canvas.height = Math.round(state.height * dpr);
+      canvas.style.width = state.width + "px";
+      canvas.style.height = state.height + "px";
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      const floorY = getFloorY();
+      if (state.ball.x === 0 && state.ball.y === 0) {
+        state.ball.x = state.width * 0.5;
+        state.ball.y = floorY - state.ball.radius;
+      } else {
+        state.ball.y = Math.min(state.ball.y, floorY - state.ball.radius);
+        state.ball.x = clamp(state.ball.x, state.ball.radius, state.width - state.ball.radius);
+      }
+    }
+
+    function getFloorY() {
+      return state.height - state.floorHeight;
+    }
+
+    function clamp(value, min, max) {
+      return Math.max(min, Math.min(max, value));
+    }
+
+    function setSensorStatus(message, showButton = true) {
+      sensorStatus.textContent = message;
+      sensorButton.hidden = !showButton;
+    }
+
+    function getOrientationAngle() {
+      if (typeof screen.orientation?.angle === "number") {
+        return screen.orientation.angle;
+      }
+      if (typeof window.orientation === "number") {
+        return window.orientation;
+      }
+      return 0;
+    }
+
+    function mapAccelerationToScreenAxes(x, y) {
+      switch (getOrientationAngle()) {
+        case 90:
+          return { x: -y, y: x };
+        case -90:
+        case 270:
+          return { x: y, y: -x };
+        case 180:
+        case -180:
+          return { x: -x, y: -y };
+        default:
+          return { x, y };
+      }
+    }
+
+    function handleDeviceMotion(event) {
+      const source = event.acceleration || event.accelerationIncludingGravity;
+      if (!source) {
+        return;
+      }
+
+      state.motionDetected = true;
+      if (state.motionCheckTimer) {
+        clearTimeout(state.motionCheckTimer);
+        state.motionCheckTimer = null;
+      }
+
+      if (!state.motionReady) {
+        state.motionReady = true;
+        setSensorStatus("Bewegungssensoren sind aktiv.", false);
+      }
+
+      const rawX = source.x ?? 0;
+      const rawY = source.y ?? 0;
+      const rawZ = source.z ?? 0;
+
+      state.motionFilter.x = state.motionFilter.x * 0.82 + rawX * 0.18;
+      state.motionFilter.y = state.motionFilter.y * 0.82 + rawY * 0.18;
+      state.motionFilter.z = state.motionFilter.z * 0.82 + rawZ * 0.18;
+
+      const linear = {
+        x: rawX - state.motionFilter.x,
+        y: rawY - state.motionFilter.y,
+        z: rawZ - state.motionFilter.z
+      };
+
+      const mapped = mapAccelerationToScreenAxes(linear.x, linear.y);
+      state.motionBias.x = state.motionBias.x * 0.9 + mapped.x * 0.1;
+      state.motionBias.y = state.motionBias.y * 0.9 + mapped.y * 0.1;
+
+      state.motionVelocity.x += (mapped.x - state.motionBias.x) * state.sensorForce;
+      state.motionVelocity.y += (mapped.y - state.motionBias.y) * state.sensorForce;
+
+      const intensity = Math.hypot(mapped.x, mapped.y, linear.z);
+      if (intensity > 1.3) {
+        sensorStatus.textContent = "Bewegung erkannt: Kugel reagiert auf Schuetteln.";
+      }
+    }
+
+    function scheduleMotionAvailabilityCheck(permissionState) {
+      if (state.motionCheckTimer) {
+        clearTimeout(state.motionCheckTimer);
+      }
+
+      state.motionCheckTimer = window.setTimeout(() => {
+        if (state.motionDetected) {
+          return;
+        }
+
+        const runningAsFile = window.location.protocol === "file:";
+        const deniedBySafari = permissionState === "denied";
+        if (runningAsFile) {
+          setSensorStatus("Keine Sensordaten verfuegbar. Auf dem iPad blockiert Safari lokale HTML-Dateien oft fuer Bewegungssensoren.", true);
+          return;
+        }
+
+        if (deniedBySafari) {
+          setSensorStatus("Safari hat keine Sensordaten freigegeben. Pruefe Safari > Einstellungen > Bewegung und Ausrichtung.", true);
+          return;
+        }
+
+        setSensorStatus("Es kommen keine Sensordaten an. Bitte Safari-Sensorfreigabe pruefen und erneut tippen.", true);
+      }, 1400);
+    }
+
+    function startMotionListener(permissionState = "unknown") {
+      if (state.motionListening) {
+        setSensorStatus(state.motionDetected ? "Bewegungssensoren sind aktiv." : "Warte auf Sensordaten ...", !state.motionDetected);
+        scheduleMotionAvailabilityCheck(permissionState);
+        return;
+      }
+
+      window.addEventListener("devicemotion", handleDeviceMotion);
+      state.motionListening = true;
+      state.motionReady = false;
+      state.motionDetected = false;
+      setSensorStatus("Warte auf Sensordaten ...", true);
+      scheduleMotionAvailabilityCheck(permissionState);
+    }
+
+    async function enableMotion() {
+      if (typeof DeviceMotionEvent === "undefined") {
+        setSensorStatus("Dieses Geraet liefert keine Bewegungssensoren.", false);
+        return;
+      }
+
+      try {
+        if (typeof DeviceMotionEvent.requestPermission === "function") {
+          const permission = await DeviceMotionEvent.requestPermission();
+          if (permission !== "granted") {
+            startMotionListener(permission);
+            return;
+          }
+
+          startMotionListener(permission);
+          return;
+        }
+
+        startMotionListener("implicit");
+      } catch (error) {
+        setSensorStatus("Sensoren konnten nicht aktiviert werden.", true);
+      }
+    }
+
+    function getPointerPosition(event) {
+      const rect = canvas.getBoundingClientRect();
+      return {
+        x: event.clientX - rect.left,
+        y: event.clientY - rect.top
+      };
+    }
+
+    function isPointerOnBall(pos) {
+      const dx = pos.x - state.ball.x;
+      const dy = pos.y - state.ball.y;
+      return dx * dx + dy * dy <= state.ball.radius * state.ball.radius;
+    }
+
+    function startDrag(event) {
+      const pos = getPointerPosition(event);
+      if (!isPointerOnBall(pos)) {
+        return;
+      }
+
+      state.ball.dragged = true;
+      state.ball.pointerId = event.pointerId;
+      state.ball.dragOffsetX = state.ball.x - pos.x;
+      state.ball.dragOffsetY = state.ball.y - pos.y;
+      state.ball.vx = 0;
+      state.ball.vy = 0;
+      state.ball.history = [];
+      canvas.classList.add("dragging");
+      canvas.setPointerCapture(event.pointerId);
+    }
+
+    function moveDrag(event) {
+      if (!state.ball.dragged || event.pointerId !== state.ball.pointerId) {
+        return;
+      }
+
+      const pos = getPointerPosition(event);
+      const nextX = clamp(state.ball.dragOffsetX + pos.x, state.ball.radius, state.width - state.ball.radius);
+      const nextY = clamp(state.ball.dragOffsetY + pos.y, state.ball.radius, getFloorY() - state.ball.radius);
+
+      state.ball.x = nextX;
+      state.ball.y = nextY;
+
+      const now = performance.now();
+      state.ball.history.push({ x: nextX, y: nextY, t: now });
+      while (state.ball.history.length > 8 || (state.ball.history.length > 1 && now - state.ball.history[0].t > 120)) {
+        state.ball.history.shift();
+      }
+    }
+
+    function endDrag(event) {
+      if (!state.ball.dragged || event.pointerId !== state.ball.pointerId) {
+        return;
+      }
+
+      const history = state.ball.history;
+      if (history.length >= 2) {
+        const first = history[0];
+        const last = history[history.length - 1];
+        const dt = Math.max((last.t - first.t) / 1000, 1 / 240);
+        state.ball.vx = (last.x - first.x) / dt;
+        state.ball.vy = (last.y - first.y) / dt;
+      }
+
+      state.ball.dragged = false;
+      state.ball.pointerId = null;
+      state.ball.history = [];
+      canvas.classList.remove("dragging");
+      if (canvas.hasPointerCapture(event.pointerId)) {
+        canvas.releasePointerCapture(event.pointerId);
+      }
+    }
+
+    function update(dt) {
+      const ball = state.ball;
+      if (ball.dragged) {
+        state.motionVelocity.x *= state.sensorDamping;
+        state.motionVelocity.y *= state.sensorDamping;
+        return;
+      }
+
+      ball.vy += state.gravity * dt;
+      ball.vx += state.motionVelocity.x * dt;
+      ball.vy += state.motionVelocity.y * dt;
+      state.motionVelocity.x *= state.sensorDamping;
+      state.motionVelocity.y *= state.sensorDamping;
+      const dragFactor = Math.max(0, 1 - state.airDrag * dt * 1000);
+      ball.vx *= dragFactor;
+      ball.vy *= dragFactor;
+
+      ball.x += ball.vx * dt;
+      ball.y += ball.vy * dt;
+
+      const radius = ball.radius;
+      const floorY = getFloorY();
+
+      if (ball.x < radius) {
+        ball.x = radius;
+        ball.vx *= -state.bounce * 0.85;
+      } else if (ball.x > state.width - radius) {
+        ball.x = state.width - radius;
+        ball.vx *= -state.bounce * 0.85;
+      }
+
+      if (ball.y + radius > floorY) {
+        ball.y = floorY - radius;
+        if (Math.abs(ball.vy) > 25) {
+          ball.vy *= -state.bounce;
+          ball.vx *= 0.985;
+        } else {
+          ball.vy = 0;
+          ball.vx *= state.rollingFriction;
+          if (Math.abs(ball.vx) < 2) {
+            ball.vx = 0;
+          }
+        }
+      }
+    }
+
+    function drawBackground() {
+      const sky = ctx.createLinearGradient(0, 0, 0, state.height);
+      sky.addColorStop(0, "#10253d");
+      sky.addColorStop(0.7, "#1d3557");
+      sky.addColorStop(1, "#264653");
+      ctx.fillStyle = sky;
+      ctx.fillRect(0, 0, state.width, state.height);
+
+      const floorY = getFloorY();
+      const floor = ctx.createLinearGradient(0, floorY, 0, state.height);
+      floor.addColorStop(0, "#73829b");
+      floor.addColorStop(1, "#2d3648");
+      ctx.fillStyle = floor;
+      ctx.fillRect(0, floorY, state.width, state.floorHeight);
+
+      ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
+      ctx.fillRect(0, floorY, state.width, 3);
+    }
+
+    function drawBall() {
+      const ball = state.ball;
+      const shadowScale = 1 + Math.min(Math.abs(ball.vy) / 900, 0.55);
+      const shadowWidth = ball.radius * 1.7 * shadowScale;
+      const shadowHeight = ball.radius * 0.42;
+      const floorY = getFloorY();
+
+      ctx.beginPath();
+      ctx.ellipse(ball.x, floorY + ball.radius * 0.18, shadowWidth, shadowHeight, 0, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(0, 0, 0, 0.22)";
+      ctx.fill();
+
+      const gradient = ctx.createRadialGradient(
+        ball.x - ball.radius * 0.35,
+        ball.y - ball.radius * 0.45,
+        ball.radius * 0.22,
+        ball.x,
+        ball.y,
+        ball.radius
+      );
+      gradient.addColorStop(0, "#ffe1b5");
+      gradient.addColorStop(0.55, "#f4a261");
+      gradient.addColorStop(1, "#c46a2d");
+
+      ctx.save();
+      ctx.shadowColor = "rgba(0, 0, 0, 0.22)";
+      ctx.shadowBlur = 18;
+      ctx.shadowOffsetY = 8;
+      ctx.beginPath();
+      ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+      ctx.fillStyle = gradient;
+      ctx.fill();
+      ctx.restore();
+
+      ctx.beginPath();
+      ctx.arc(ball.x - ball.radius * 0.28, ball.y - ball.radius * 0.34, ball.radius * 0.22, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(255, 255, 255, 0.22)";
+      ctx.fill();
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, state.width, state.height);
+      drawBackground();
+      drawBall();
+    }
+
+    function frame(now) {
+      const dt = Math.min((now - state.lastTime) / 1000, 1 / 30);
+      state.lastTime = now;
+      update(dt);
+      draw();
+      requestAnimationFrame(frame);
+    }
+
+    canvas.addEventListener("pointerdown", startDrag);
+    canvas.addEventListener("pointermove", moveDrag);
+    canvas.addEventListener("pointerup", endDrag);
+    canvas.addEventListener("pointercancel", endDrag);
+    canvas.addEventListener("lostpointercapture", (event) => {
+      if (state.ball.dragged && event.pointerId === state.ball.pointerId) {
+        endDrag(event);
+      }
+    });
+
+    window.addEventListener("resize", resize);
+    window.addEventListener("orientationchange", resize);
+    document.addEventListener("gesturestart", (event) => event.preventDefault());
+    document.addEventListener("gesturechange", (event) => event.preventDefault());
+    document.addEventListener("wheel", (event) => {
+      if (event.ctrlKey) {
+        event.preventDefault();
+      }
+    }, { passive: false });
+    sensorButton.addEventListener("click", enableMotion);
+
+    setSensorStatus("Sensoren sind noch nicht aktiviert. Tippe auf den Button fuer die Freigabe.", true);
+    resize();
+    draw();
+    requestAnimationFrame((time) => {
+      state.lastTime = time;
+      requestAnimationFrame(frame);
+    });
+  </script>
+</body>
+</html>
