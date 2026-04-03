@@ -7,8 +7,8 @@
   <style>
     :root {
       color-scheme: dark;
-      --bg-top: #0d1b2a;
-      --bg-bottom: #1b263b;
+      --bg-top: #163328;
+      --bg-bottom: #244438;
       --floor-top: #5c677d;
       --floor-bottom: #2f3b52;
       --ball-fill: #f4a261;
@@ -132,7 +132,7 @@
       airDrag: 0.0008,
       bounce: 0.52,
       rollingFriction: 0.985,
-      tiltStrength: 1150,
+      maxFloorTilt: 0.42,
       arrowScale: 26,
       motionReady: false,
       motionListening: false,
@@ -165,18 +165,43 @@
       canvas.style.height = state.height + "px";
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-      const floorY = getFloorY();
+      const floorY = getFloorYAt(state.width * 0.5);
       if (state.ball.x === 0 && state.ball.y === 0) {
         state.ball.x = state.width * 0.5;
         state.ball.y = floorY - state.ball.radius;
       } else {
-        state.ball.y = Math.min(state.ball.y, floorY - state.ball.radius);
         state.ball.x = clamp(state.ball.x, state.ball.radius, state.width - state.ball.radius);
+        const constrainedFloorY = getFloorYAt(state.ball.x);
+        state.ball.y = Math.min(state.ball.y, constrainedFloorY - state.ball.radius);
       }
     }
 
-    function getFloorY() {
+    function getFloorAngle() {
+      return clamp(state.tilt.x, -1, 1) * state.maxFloorTilt;
+    }
+
+    function getFloorSlope() {
+      return Math.tan(getFloorAngle());
+    }
+
+    function getFloorAnchorY() {
       return state.height - state.floorHeight;
+    }
+
+    function getFloorYAt(x) {
+      return getFloorAnchorY() + (x - state.width * 0.5) * getFloorSlope();
+    }
+
+    function getFloorNormal() {
+      const slope = getFloorSlope();
+      const length = Math.hypot(slope, 1);
+      return { x: -slope / length, y: -1 / length };
+    }
+
+    function getFloorTangent() {
+      const slope = getFloorSlope();
+      const length = Math.hypot(1, slope);
+      return { x: 1 / length, y: slope / length };
     }
 
     function clamp(value, min, max) {
@@ -248,20 +273,15 @@
       smoothVector(state.motionFilter, { x: gravityVector.x, y: gravityVector.y }, 0.16);
       smoothVector(state.tilt, state.motionFilter, 0.18);
 
-      const delta = {
-        x: gravityVector.x - state.tilt.x,
-        y: gravityVector.y - state.tilt.y,
-        z: rawZ / 9.81
-      };
       const arrowTarget = {
-        x: clamp(delta.x * 2.2, -1.4, 1.4),
-        y: clamp(delta.y * 2.2, -1.4, 1.4)
+        x: clamp(state.tilt.x * 1.1, -1.2, 1.2),
+        y: clamp(state.tilt.y * 1.1, -1.2, 1.2)
       };
       smoothVector(state.arrow, arrowTarget, 0.28);
 
       const tiltMagnitude = Math.hypot(state.tilt.x, state.tilt.y);
       if (tiltMagnitude > 0.08) {
-        sensorStatus.textContent = "Neigung aktiv: Die Kugel rollt in Kipprichtung.";
+        sensorStatus.textContent = "Neigung aktiv: Der Boden ist schraeg und die Kugel rollt bergab.";
       }
     }
 
@@ -368,7 +388,7 @@
 
       const pos = getPointerPosition(event);
       const nextX = clamp(state.ball.dragOffsetX + pos.x, state.ball.radius, state.width - state.ball.radius);
-      const nextY = clamp(state.ball.dragOffsetY + pos.y, state.ball.radius, getFloorY() - state.ball.radius);
+      const nextY = clamp(state.ball.dragOffsetY + pos.y, state.ball.radius, getFloorYAt(nextX) - state.ball.radius);
 
       state.ball.x = nextX;
       state.ball.y = nextY;
@@ -410,7 +430,6 @@
       }
 
       ball.vy += state.gravity * dt;
-      ball.vx += state.tilt.x * state.tiltStrength * dt;
       const dragFactor = Math.max(0, 1 - state.airDrag * dt * 1000);
       ball.vx *= dragFactor;
       ball.vy *= dragFactor;
@@ -419,7 +438,6 @@
       ball.y += ball.vy * dt;
 
       const radius = ball.radius;
-      const floorY = getFloorY();
 
       if (ball.x < radius) {
         ball.x = radius;
@@ -429,38 +447,65 @@
         ball.vx *= -state.bounce * 0.85;
       }
 
-      if (ball.y + radius > floorY) {
-        ball.y = floorY - radius;
-        if (Math.abs(ball.vy) > 25) {
-          ball.vy *= -state.bounce;
-          ball.vx *= 0.985;
+      const tangent = getFloorTangent();
+      const normal = getFloorNormal();
+      const anchorX = state.width * 0.5;
+      const anchorY = getFloorAnchorY();
+      const distanceToFloor = (ball.x - anchorX) * normal.x + (ball.y - anchorY) * normal.y;
+
+      if (distanceToFloor < radius) {
+        const penetration = radius - distanceToFloor;
+        ball.x += normal.x * penetration;
+        ball.y += normal.y * penetration;
+
+        const velocityAlongNormal = ball.vx * normal.x + ball.vy * normal.y;
+        const velocityAlongTangent = ball.vx * tangent.x + ball.vy * tangent.y;
+
+        if (velocityAlongNormal < -20) {
+          const bouncedNormal = -velocityAlongNormal * state.bounce;
+          const dampedTangent = velocityAlongTangent * 0.992;
+          ball.vx = tangent.x * dampedTangent + normal.x * bouncedNormal;
+          ball.vy = tangent.y * dampedTangent + normal.y * bouncedNormal;
         } else {
-          ball.vy = 0;
-          ball.vx *= state.rollingFriction;
-          if (Math.abs(ball.vx) < 2) {
-            ball.vx = 0;
+          let rolledTangent = velocityAlongTangent * state.rollingFriction;
+          if (Math.abs(rolledTangent) < 1.5) {
+            rolledTangent = 0;
           }
+          ball.vx = tangent.x * rolledTangent;
+          ball.vy = tangent.y * rolledTangent;
         }
       }
     }
 
     function drawBackground() {
       const sky = ctx.createLinearGradient(0, 0, 0, state.height);
-      sky.addColorStop(0, "#10253d");
-      sky.addColorStop(0.7, "#1d3557");
-      sky.addColorStop(1, "#264653");
+      sky.addColorStop(0, "#173429");
+      sky.addColorStop(0.7, "#295041");
+      sky.addColorStop(1, "#355f4d");
       ctx.fillStyle = sky;
       ctx.fillRect(0, 0, state.width, state.height);
 
-      const floorY = getFloorY();
-      const floor = ctx.createLinearGradient(0, floorY, 0, state.height);
+      const leftFloorY = getFloorYAt(0);
+      const rightFloorY = getFloorYAt(state.width);
+      const floorTop = Math.min(leftFloorY, rightFloorY);
+      const floor = ctx.createLinearGradient(0, floorTop, 0, state.height);
       floor.addColorStop(0, "#73829b");
       floor.addColorStop(1, "#2d3648");
       ctx.fillStyle = floor;
-      ctx.fillRect(0, floorY, state.width, state.floorHeight);
+      ctx.beginPath();
+      ctx.moveTo(0, leftFloorY);
+      ctx.lineTo(state.width, rightFloorY);
+      ctx.lineTo(state.width, state.height);
+      ctx.lineTo(0, state.height);
+      ctx.closePath();
+      ctx.fill();
 
-      ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
-      ctx.fillRect(0, floorY, state.width, 3);
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.14)";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(0, leftFloorY);
+      ctx.lineTo(state.width, rightFloorY);
+      ctx.stroke();
 
       drawAccelerationArrow();
     }
@@ -510,7 +555,7 @@
       ctx.fillStyle = "rgba(255, 255, 255, 0.55)";
       ctx.font = "600 13px 'Segoe UI', sans-serif";
       ctx.textAlign = "center";
-      ctx.fillText("Beschleunigungsrichtung", cx, cy - 72);
+      ctx.fillText("Neigungsrichtung", cx, cy - 72);
       ctx.restore();
     }
 
@@ -519,10 +564,11 @@
       const shadowScale = 1 + Math.min(Math.abs(ball.vy) / 900, 0.55);
       const shadowWidth = ball.radius * 1.7 * shadowScale;
       const shadowHeight = ball.radius * 0.42;
-      const floorY = getFloorY();
+      const floorY = getFloorYAt(ball.x);
+      const floorAngle = getFloorAngle();
 
       ctx.beginPath();
-      ctx.ellipse(ball.x, floorY + ball.radius * 0.18, shadowWidth, shadowHeight, 0, 0, Math.PI * 2);
+      ctx.ellipse(ball.x, floorY + ball.radius * 0.2, shadowWidth, shadowHeight, floorAngle, 0, Math.PI * 2);
       ctx.fillStyle = "rgba(0, 0, 0, 0.22)";
       ctx.fill();
 
