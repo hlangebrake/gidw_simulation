@@ -132,15 +132,15 @@
       airDrag: 0.0008,
       bounce: 0.52,
       rollingFriction: 0.985,
-      sensorForce: 900,
-      sensorDamping: 0.92,
+      tiltStrength: 1150,
+      arrowScale: 26,
       motionReady: false,
       motionListening: false,
       motionDetected: false,
       motionCheckTimer: null,
-      motionVelocity: { x: 0, y: 0 },
       motionFilter: { x: 0, y: 0, z: 0 },
-      motionBias: { x: 0, y: 0 },
+      tilt: { x: 0, y: 0 },
+      arrow: { x: 0, y: 0 },
       ball: {
         radius: 34,
         x: 0,
@@ -213,8 +213,13 @@
       }
     }
 
+    function smoothVector(current, target, factor) {
+      current.x += (target.x - current.x) * factor;
+      current.y += (target.y - current.y) * factor;
+    }
+
     function handleDeviceMotion(event) {
-      const source = event.acceleration || event.accelerationIncludingGravity;
+      const source = event.accelerationIncludingGravity || event.acceleration;
       if (!source) {
         return;
       }
@@ -234,26 +239,29 @@
       const rawY = source.y ?? 0;
       const rawZ = source.z ?? 0;
 
-      state.motionFilter.x = state.motionFilter.x * 0.82 + rawX * 0.18;
-      state.motionFilter.y = state.motionFilter.y * 0.82 + rawY * 0.18;
-      state.motionFilter.z = state.motionFilter.z * 0.82 + rawZ * 0.18;
-
-      const linear = {
-        x: rawX - state.motionFilter.x,
-        y: rawY - state.motionFilter.y,
-        z: rawZ - state.motionFilter.z
+      const mappedGravity = mapAccelerationToScreenAxes(rawX, rawY);
+      const gravityVector = {
+        x: clamp(mappedGravity.x / 9.81, -1, 1),
+        y: clamp(mappedGravity.y / 9.81, -1, 1)
       };
 
-      const mapped = mapAccelerationToScreenAxes(linear.x, linear.y);
-      state.motionBias.x = state.motionBias.x * 0.9 + mapped.x * 0.1;
-      state.motionBias.y = state.motionBias.y * 0.9 + mapped.y * 0.1;
+      smoothVector(state.motionFilter, { x: gravityVector.x, y: gravityVector.y }, 0.16);
+      smoothVector(state.tilt, state.motionFilter, 0.18);
 
-      state.motionVelocity.x += (mapped.x - state.motionBias.x) * state.sensorForce;
-      state.motionVelocity.y += (mapped.y - state.motionBias.y) * state.sensorForce;
+      const delta = {
+        x: gravityVector.x - state.tilt.x,
+        y: gravityVector.y - state.tilt.y,
+        z: rawZ / 9.81
+      };
+      const arrowTarget = {
+        x: clamp(delta.x * 2.2, -1.4, 1.4),
+        y: clamp(delta.y * 2.2, -1.4, 1.4)
+      };
+      smoothVector(state.arrow, arrowTarget, 0.28);
 
-      const intensity = Math.hypot(mapped.x, mapped.y, linear.z);
-      if (intensity > 1.3) {
-        sensorStatus.textContent = "Bewegung erkannt: Kugel reagiert auf Schuetteln.";
+      const tiltMagnitude = Math.hypot(state.tilt.x, state.tilt.y);
+      if (tiltMagnitude > 0.08) {
+        sensorStatus.textContent = "Neigung aktiv: Die Kugel rollt in Kipprichtung.";
       }
     }
 
@@ -275,7 +283,7 @@
         }
 
         if (deniedBySafari) {
-          setSensorStatus("Safari hat keine Sensordaten freigegeben. Pruefe Safari > Einstellungen > Bewegung und Ausrichtung.", true);
+          setSensorStatus("Safari liefert keine Sensordaten an die Seite.", true);
           return;
         }
 
@@ -398,16 +406,11 @@
     function update(dt) {
       const ball = state.ball;
       if (ball.dragged) {
-        state.motionVelocity.x *= state.sensorDamping;
-        state.motionVelocity.y *= state.sensorDamping;
         return;
       }
 
       ball.vy += state.gravity * dt;
-      ball.vx += state.motionVelocity.x * dt;
-      ball.vy += state.motionVelocity.y * dt;
-      state.motionVelocity.x *= state.sensorDamping;
-      state.motionVelocity.y *= state.sensorDamping;
+      ball.vx += state.tilt.x * state.tiltStrength * dt;
       const dragFactor = Math.max(0, 1 - state.airDrag * dt * 1000);
       ball.vx *= dragFactor;
       ball.vy *= dragFactor;
@@ -458,6 +461,57 @@
 
       ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
       ctx.fillRect(0, floorY, state.width, 3);
+
+      drawAccelerationArrow();
+    }
+
+    function drawAccelerationArrow() {
+      const cx = state.width * 0.5;
+      const cy = Math.max(140, state.height * 0.28);
+      const dx = state.arrow.x * state.arrowScale * 6;
+      const dy = state.arrow.y * state.arrowScale * 6;
+      const magnitude = Math.hypot(dx, dy);
+
+      ctx.save();
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.14)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(cx, cy, 52, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(255, 255, 255, 0.2)";
+      ctx.fill();
+
+      if (magnitude > 4) {
+        const angle = Math.atan2(dy, dx);
+        const head = 16;
+        const left = angle + Math.PI * 0.82;
+        const right = angle - Math.PI * 0.82;
+
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.42)";
+        ctx.lineWidth = 6;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(cx + dx, cy + dy);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.moveTo(cx + dx, cy + dy);
+        ctx.lineTo(cx + dx + Math.cos(left) * head, cy + dy + Math.sin(left) * head);
+        ctx.lineTo(cx + dx + Math.cos(right) * head, cy + dy + Math.sin(right) * head);
+        ctx.closePath();
+        ctx.fillStyle = "rgba(255, 255, 255, 0.42)";
+        ctx.fill();
+      }
+
+      ctx.fillStyle = "rgba(255, 255, 255, 0.55)";
+      ctx.font = "600 13px 'Segoe UI', sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("Beschleunigungsrichtung", cx, cy - 72);
+      ctx.restore();
     }
 
     function drawBall() {
