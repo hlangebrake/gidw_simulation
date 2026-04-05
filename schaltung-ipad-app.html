@@ -1,0 +1,1563 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Schaltung bauen</title>
+  <style>
+    :root{
+      --bg:#f1f5f9;
+      --panel:#ffffffee;
+      --border:#cbd5e1;
+      --text:#0f172a;
+      --muted:#64748b;
+      --active:#16a34a;
+      --danger:#ef4444;
+      --snap:#0ea5e9;
+      --selected:#2563eb;
+      --hover:#38bdf8;
+      --wireOuter:#1f2937;
+      --wireInner:#64748b;
+    }
+    *{box-sizing:border-box}
+    html,body{
+      margin:0;
+      width:100%;
+      height:100%;
+      overflow:hidden;
+      background:var(--bg);
+      font-family:Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color:var(--text);
+      touch-action:none;
+    }
+    #app{
+      position:relative;
+      width:100vw;
+      height:100vh;
+      overflow:hidden;
+      background:
+        radial-gradient(circle at 1px 1px, rgba(148,163,184,.18) 1px, transparent 0);
+      background-size:24px 24px;
+      user-select:none;
+      -webkit-user-select:none;
+    }
+    #toolbar{
+      position:absolute;
+      left:16px;
+      top:16px;
+      z-index:20;
+      display:flex;
+      gap:8px;
+      flex-wrap:wrap;
+      max-width:calc(100% - 140px);
+      padding:12px;
+      border:1px solid var(--border);
+      border-radius:18px;
+      background:var(--panel);
+      backdrop-filter:blur(10px);
+      box-shadow:0 1px 3px rgba(15,23,42,.08);
+    }
+    .tool-card{
+      width:86px;
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      gap:6px;
+      padding:8px 8px 10px;
+      border:1px solid var(--border);
+      background:white;
+      color:#334155;
+      border-radius:14px;
+      box-shadow:0 1px 2px rgba(15,23,42,.05);
+      cursor:grab;
+      touch-action:none;
+    }
+    .tool-card:active{ transform:scale(.98); }
+    .tool-icon{
+      width:60px;
+      height:40px;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+    }
+    .tool-icon svg{
+      width:60px;
+      height:40px;
+      overflow:visible;
+    }
+    .tool-label{
+      font-size:12px;
+      font-weight:600;
+      color:#334155;
+      line-height:1.1;
+      text-align:center;
+    }
+    .toolbar-actions{
+      display:flex;
+      gap:8px;
+      flex-wrap:wrap;
+      align-items:flex-start;
+    }
+    #toolbar button{
+      appearance:none;
+      border:1px solid var(--border);
+      background:white;
+      color:#334155;
+      border-radius:12px;
+      padding:10px 14px;
+      font-size:14px;
+      font-weight:600;
+      box-shadow:0 1px 2px rgba(15,23,42,.05);
+    }
+    #toolbar button:active{ transform:scale(.98); }
+    #paletteGhost{
+      position:absolute;
+      z-index:40;
+      width:86px;
+      pointer-events:none;
+      opacity:.95;
+      transform:translate(-43px, -24px);
+      display:none;
+      filter:drop-shadow(0 8px 16px rgba(15,23,42,.18));
+    }
+    #paletteGhost.visible{ display:block; }
+    #trash{
+      position:absolute;
+      right:24px;
+      bottom:24px;
+      width:84px;
+      height:84px;
+      border:2px solid var(--border);
+      border-radius:20px;
+      background:rgba(255,255,255,.88);
+      backdrop-filter:blur(10px);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      font-size:34px;
+      box-shadow:0 1px 3px rgba(15,23,42,.08);
+      transition:.15s ease;
+      z-index:15;
+    }
+    #trash.active{
+      border-color:var(--danger);
+      background:#fef2f2;
+      transform:scale(1.05);
+    }
+    #workspace{
+      position:absolute;
+      inset:0;
+      width:100%;
+      height:100%;
+      overflow:visible;
+      touch-action:none;
+    }
+    .ghost-hit{ fill:transparent; pointer-events:all; cursor:grab; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="toolbar">
+      <div class="tool-card" data-add="battery"><div class="tool-icon"></div><div class="tool-label">Batterie</div></div>
+      <div class="tool-card" data-add="lamp"><div class="tool-icon"></div><div class="tool-label">Lampe</div></div>
+      <div class="tool-card" data-add="fan"><div class="tool-icon"></div><div class="tool-label">Ventilator</div></div>
+      <div class="tool-card" data-add="bell"><div class="tool-icon"></div><div class="tool-label">Klingel</div></div>
+      <div class="tool-card" data-add="switch"><div class="tool-icon"></div><div class="tool-label">Schalter</div></div>
+      <div class="tool-card" data-add="wire"><div class="tool-icon"></div><div class="tool-label">Kabel</div></div>
+      <div class="toolbar-actions">
+        <button id="exportBtn">Export</button>
+        <button id="importBtn">Import</button>
+        <button id="clearBtn">Leeren</button>
+      </div>
+    </div>
+    <div id="paletteGhost"></div>
+    <input id="importInput" type="file" accept="application/json,.json" style="display:none" />
+    <div id="trash">🗑️</div>
+    <svg id="workspace"></svg>
+  </div>
+
+  <script>
+    const SVG_NS = "http://www.w3.org/2000/svg";
+    const SNAP_RADIUS = 28;
+    const HANDLE_RADIUS = 11;
+    const LOAD_RESISTANCE = 10;
+    const WIRE_RESISTANCE = 0.05;
+    const SWITCH_RESISTANCE = 0.02;
+    const BATTERY_VOLTAGE = 3;
+    const ACTIVE_CURRENT = 0.02;
+    const DB_NAME = 'schaltung-ipad-app-db';
+    const STORE_NAME = 'states';
+    const STATE_KEY = 'latest';
+    const EXPORT_VERSION = 1;
+
+    const LENGTHS = {
+      battery: 130,
+      lamp: 130,
+      fan: 130,
+      bell: 130,
+      switch: 110,
+      wire: 160
+    };
+
+    const state = {
+      components: [],
+      junctions: {},
+      simulation: { currents:{}, active:{} },
+      drag: null,
+      size: { width: window.innerWidth, height: window.innerHeight },
+      selectedCompId: null,
+      hoveredCompId: null,
+      hoverTrash: false,
+      snapTarget: null,
+      paletteDrag: null,
+    };
+
+    const app = document.getElementById('app');
+    const workspace = document.getElementById('workspace');
+    const trash = document.getElementById('trash');
+    const toolbar = document.getElementById('toolbar');
+    const exportBtn = document.getElementById('exportBtn');
+    const importBtn = document.getElementById('importBtn');
+    const importInput = document.getElementById('importInput');
+    const clearBtn = document.getElementById('clearBtn');
+    const paletteGhost = document.getElementById('paletteGhost');
+
+    let dbPromise = null;
+    let persistTimer = null;
+
+    function getSerializableState(){
+      return {
+        version: EXPORT_VERSION,
+        savedAt: new Date().toISOString(),
+        selectedCompId: state.selectedCompId ?? null,
+        components: state.components.map(comp => ({ ...comp })),
+        junctions: Object.fromEntries(
+          Object.entries(state.junctions).map(([id, junction]) => [
+            id,
+            { ...junction, terminalKeys:[...junction.terminalKeys] }
+          ])
+        )
+      };
+    }
+
+    function isValidImportedState(data){
+      if(!data || typeof data !== 'object') return false;
+      if(!Array.isArray(data.components)) return false;
+      if(!data.junctions || typeof data.junctions !== 'object' || Array.isArray(data.junctions)) return false;
+      return data.components.every(comp =>
+        comp &&
+        typeof comp === 'object' &&
+        typeof comp.id === 'string' &&
+        typeof comp.type === 'string' &&
+        typeof comp.aJunctionId === 'string' &&
+        typeof comp.bJunctionId === 'string'
+      );
+    }
+
+    function openDb(){
+      if(dbPromise) return dbPromise;
+      dbPromise = new Promise((resolve, reject) => {
+        const request = indexedDB.open(DB_NAME, 1);
+        request.onupgradeneeded = () => {
+          const db = request.result;
+          if(!db.objectStoreNames.contains(STORE_NAME)){
+            db.createObjectStore(STORE_NAME);
+          }
+        };
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error || new Error('IndexedDB konnte nicht geöffnet werden.'));
+      });
+      return dbPromise;
+    }
+
+    async function persistStateNow(){
+      const snapshot = getSerializableState();
+      try{
+        const db = await openDb();
+        await new Promise((resolve, reject) => {
+          const tx = db.transaction(STORE_NAME, 'readwrite');
+          tx.objectStore(STORE_NAME).put(snapshot, STATE_KEY);
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error || new Error('Speichern fehlgeschlagen.'));
+          tx.onabort = () => reject(tx.error || new Error('Speichern abgebrochen.'));
+        });
+      }catch(error){
+        console.error(error);
+      }
+    }
+
+    function schedulePersist(){
+      clearTimeout(persistTimer);
+      persistTimer = setTimeout(() => {
+        persistStateNow();
+      }, 180);
+    }
+
+    async function loadPersistedState(){
+      try{
+        const db = await openDb();
+        return await new Promise((resolve, reject) => {
+          const tx = db.transaction(STORE_NAME, 'readonly');
+          const request = tx.objectStore(STORE_NAME).get(STATE_KEY);
+          request.onsuccess = () => resolve(request.result || null);
+          request.onerror = () => reject(request.error || new Error('Laden fehlgeschlagen.'));
+        });
+      }catch(error){
+        console.error(error);
+        return null;
+      }
+    }
+
+    function applyImportedState(data){
+      if(!isValidImportedState(data)){
+        throw new Error('Ungültige JSON-Datei.');
+      }
+      state.selectedCompId = data.selectedCompId ?? null;
+      state.hoveredCompId = null;
+      state.drag = null;
+      state.hoverTrash = false;
+      state.snapTarget = null;
+      setModel({
+        components: data.components.map(comp => ({ ...comp })),
+        junctions: Object.fromEntries(
+          Object.entries(data.junctions).map(([id, junction]) => [
+            id,
+            { ...junction, terminalKeys:[...(junction.terminalKeys || [])] }
+          ])
+        )
+      });
+    }
+
+    function downloadJson(filename, content){
+      const blob = new Blob([content], { type:'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    async function exportCurrentState(){
+      const payload = JSON.stringify(getSerializableState(), null, 2);
+      downloadJson('schaltung-export.json', payload);
+    }
+
+    async function importFromFile(file){
+      const text = await file.text();
+      const data = JSON.parse(text);
+      applyImportedState(data);
+      await persistStateNow();
+    }
+
+    function paletteSvg(type){
+      const common = `stroke="#475569" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"`;
+      if(type === 'battery'){
+        return `<svg viewBox="0 0 60 40"><line x1="3" y1="20" x2="21" y2="20" ${common}/><line x1="39" y1="20" x2="57" y2="20" ${common}/><line x1="24" y1="10" x2="24" y2="30" ${common}/><line x1="34" y1="6" x2="34" y2="34" ${common}/><text x="18" y="11" font-size="10" fill="#0f172a">+</text><text x="40" y="11" font-size="10" fill="#0f172a">−</text></svg>`;
+      }
+      if(type === 'lamp'){
+        return `<svg viewBox="0 0 60 40"><line x1="3" y1="20" x2="14" y2="20" ${common}/><line x1="46" y1="20" x2="57" y2="20" ${common}/><circle cx="30" cy="20" r="12" stroke="#475569" stroke-width="2.5" fill="#fff"/><path d="M24 24 L27 16 L33 24 L36 16" stroke="#475569" stroke-width="2.3" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+      }
+      if(type === 'fan'){
+        return `<svg viewBox="0 0 60 40"><line x1="3" y1="20" x2="14" y2="20" ${common}/><line x1="46" y1="20" x2="57" y2="20" ${common}/><circle cx="30" cy="20" r="12" stroke="#475569" stroke-width="2.5" fill="#fff"/><path d="M30 9 C35 7 39 12 35 17 C33 19 30 18 30 17 Z" fill="#cbd5e1" stroke="#475569" stroke-width="1.6"/><path d="M40 24 C41 18 35 15 31 18 C29 20 29 23 30 24 Z" fill="#cbd5e1" stroke="#475569" stroke-width="1.6"/><path d="M20 24 C19 18 25 15 29 18 C31 20 31 23 30 24 Z" fill="#cbd5e1" stroke="#475569" stroke-width="1.6"/><circle cx="30" cy="20" r="2.5" fill="#475569"/></svg>`;
+      }
+      if(type === 'bell'){
+        return `<svg viewBox="0 0 60 40"><line x1="3" y1="20" x2="13" y2="20" ${common}/><line x1="47" y1="20" x2="57" y2="20" ${common}/><path d="M20 20 Q20 8 30 8 Q40 8 40 20 L43 25 L17 25 Z" fill="#fff" stroke="#475569" stroke-width="2.5" stroke-linejoin="round"/><circle cx="30" cy="28" r="2.5" fill="#475569"/><line x1="24" y1="31" x2="36" y2="31" ${common}/></svg>`;
+      }
+      if(type === 'switch'){
+        return `<svg viewBox="0 0 60 40"><line x1="3" y1="20" x2="18" y2="20" ${common}/><line x1="42" y1="20" x2="57" y2="20" ${common}/><circle cx="22" cy="20" r="3" fill="#475569"/><circle cx="38" cy="20" r="3" fill="#475569"/><line x1="22" y1="20" x2="35" y2="12" ${common}/></svg>`;
+      }
+      return `<svg viewBox="0 0 60 40"><path d="M4 20 Q18 6 30 20 T56 20" fill="none" stroke="#111827" stroke-width="8" stroke-linecap="round"/><path d="M4 20 Q18 6 30 20 T56 20" fill="none" stroke="#94a3b8" stroke-width="4" stroke-linecap="round"/></svg>`;
+    }
+
+    function mountPaletteIcons(){
+      toolbar.querySelectorAll('.tool-card[data-add]').forEach(card => {
+        const icon = card.querySelector('.tool-icon');
+        if(icon) icon.innerHTML = paletteSvg(card.dataset.add);
+      });
+    }
+
+    function updatePaletteGhostPosition(point){
+      paletteGhost.style.left = `${point.x}px`;
+      paletteGhost.style.top = `${point.y}px`;
+    }
+
+    function beginPaletteDrag(type, e){
+      e.preventDefault();
+      e.stopPropagation();
+      state.paletteDrag = {
+        type,
+        pointerId: e.pointerId ?? null
+      };
+      paletteGhost.innerHTML = `<div class="tool-card"><div class="tool-icon">${paletteSvg(type)}</div><div class="tool-label">${toolbar.querySelector('.tool-card[data-add="' + type + '"] .tool-label').textContent}</div></div>`;
+      paletteGhost.classList.add('visible');
+      updatePaletteGhostPosition(pointFromEvent(e));
+      try{ app.setPointerCapture?.(e.pointerId); }catch{}
+    }
+
+    function endPaletteDrag(e){
+      if(!state.paletteDrag) return;
+      if(state.paletteDrag.pointerId != null && e.pointerId != null && e.pointerId !== state.paletteDrag.pointerId) return;
+      const p = pointFromEvent(e);
+      const toolbarRect = toolbar.getBoundingClientRect();
+      const appRect = app.getBoundingClientRect();
+      const insideToolbar = e.clientX >= toolbarRect.left && e.clientX <= toolbarRect.right && e.clientY >= toolbarRect.top && e.clientY <= toolbarRect.bottom;
+      const insideApp = e.clientX >= appRect.left && e.clientX <= appRect.right && e.clientY >= appRect.top && e.clientY <= appRect.bottom;
+      if(!insideToolbar && insideApp){
+        addComponent(state.paletteDrag.type, p.x, p.y);
+      }
+      paletteGhost.classList.remove('visible');
+      paletteGhost.innerHTML = '';
+      state.paletteDrag = null;
+      try{
+        if(e.pointerId != null && app.hasPointerCapture && app.hasPointerCapture(e.pointerId)){
+          app.releasePointerCapture(e.pointerId);
+        }
+      }catch{}
+    }
+
+    function uid(prefix){
+      return `${prefix}-${Math.random().toString(36).slice(2,10)}`;
+    }
+    function distance(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
+    function midpoint(a,b){ return { x:(a.x+b.x)/2, y:(a.y+b.y)/2 }; }
+    function terminalKey(compId, side){ return `${compId}::${side}`; }
+    function parseTerminalKey(key){
+      const idx = key.lastIndexOf('::');
+      return { compId:key.slice(0,idx), side:key.slice(idx+2) };
+    }
+    function normalize(vx, vy){
+      const len = Math.hypot(vx, vy) || 1;
+      return { x:vx/len, y:vy/len, len };
+    }
+    function clampAnglePoint(fixed, point, radius){
+      const dx = point.x - fixed.x;
+      const dy = point.y - fixed.y;
+      const n = normalize(dx, dy);
+      return { x: fixed.x + n.x * radius, y: fixed.y + n.y * radius };
+    }
+    function findComponent(compId){
+      return state.components.find(c => c.id === compId);
+    }
+    function cloneModel(){
+      return {
+        components: state.components.map(c => ({ ...c })),
+        junctions: Object.fromEntries(
+          Object.entries(state.junctions).map(([id,j]) => [id, { ...j, terminalKeys:[...j.terminalKeys] }])
+        )
+      };
+    }
+    function setModel(next){
+      state.components = next.components;
+      state.junctions = next.junctions;
+      state.simulation = buildSimulation();
+      render();
+      schedulePersist();
+    }
+    function getJunction(jid){ return state.junctions[jid] || null; }
+    function getTerminalJunctionId(compId, side){
+      const comp = findComponent(compId);
+      if(!comp) return null;
+      return side === 'a' ? comp.aJunctionId : comp.bJunctionId;
+    }
+    function getTerminalPosition(compId, side){
+      const jid = getTerminalJunctionId(compId, side);
+      const j = getJunction(jid);
+      return j ? { x:j.x, y:j.y } : { x:0, y:0 };
+    }
+    function getOtherSide(side){ return side === 'a' ? 'b' : 'a'; }
+    function componentLength(comp){
+      return comp.baseLength || LENGTHS[comp.type] || 130;
+    }
+    function isRigidComponent(comp){
+      return !!comp && comp.type !== 'wire';
+    }
+    function getRigidGroupForComponent(compId){
+      const start = findComponent(compId);
+      if(!isRigidComponent(start)) return [compId];
+
+      const adjacency = {};
+      state.components.forEach(comp => {
+        if(isRigidComponent(comp)) adjacency[comp.id] = new Set();
+      });
+
+      Object.values(state.junctions).forEach(junction => {
+        const rigidIds = [...new Set(
+          junction.terminalKeys
+            .map(key => parseTerminalKey(key).compId)
+            .filter(id => isRigidComponent(findComponent(id)))
+        )];
+
+        for(let i = 0; i < rigidIds.length; i++){
+          for(let j = i + 1; j < rigidIds.length; j++){
+            adjacency[rigidIds[i]].add(rigidIds[j]);
+            adjacency[rigidIds[j]].add(rigidIds[i]);
+          }
+        }
+      });
+
+      const visited = new Set([compId]);
+      const stack = [compId];
+
+      while(stack.length){
+        const cur = stack.pop();
+        (adjacency[cur] || []).forEach(nextId => {
+          if(!visited.has(nextId)){
+            visited.add(nextId);
+            stack.push(nextId);
+          }
+        });
+      }
+
+      return [...visited];
+    }
+    function addComponent(type, x, y){
+      const next = cloneModel();
+      const id = uid(type);
+      const half = (LENGTHS[type] || 130) / 2;
+      const aId = uid('j');
+      const bId = uid('j');
+      next.junctions[aId] = { id:aId, x:x-half, y, terminalKeys:[terminalKey(id,'a')] };
+      next.junctions[bId] = { id:bId, x:x+half, y, terminalKeys:[terminalKey(id,'b')] };
+
+      next.components.push({
+        id,
+        type,
+        aJunctionId:aId,
+        bJunctionId:bId,
+        closed: type === 'switch' ? false : undefined,
+        bendDx: type === 'wire' ? 0 : undefined,
+        bendDy: type === 'wire' ? 0 : undefined,
+        baseLength: LENGTHS[type] || 130
+      });
+
+      state.selectedCompId = id;
+      setModel(next);
+    }
+    function moveJunctionTo(junctionId, x, y){
+      const next = cloneModel();
+      if(!next.junctions[junctionId]) return;
+      next.junctions[junctionId].x = x;
+      next.junctions[junctionId].y = y;
+      setModel(next);
+    }
+    function translateRigidGroup(compIds, dx, dy){
+      const next = cloneModel();
+      const junctionIds = new Set();
+
+      (compIds || []).forEach(compId => {
+        const comp = next.components.find(c => c.id === compId);
+        if(!comp) return;
+        junctionIds.add(comp.aJunctionId);
+        junctionIds.add(comp.bJunctionId);
+      });
+
+      junctionIds.forEach(jid => {
+        if(next.junctions[jid]){
+          next.junctions[jid].x += dx;
+          next.junctions[jid].y += dy;
+        }
+      });
+
+      setModel(next);
+    }
+    function setWireBendFromPoint(compId, point){
+      const next = cloneModel();
+      const comp = next.components.find(c => c.id === compId);
+      if(!comp || comp.type !== 'wire') return;
+      const a = getTerminalPosition(compId, 'a');
+      const b = getTerminalPosition(compId, 'b');
+      const mid = midpoint(a, b);
+      comp.bendDx = point.x - mid.x;
+      comp.bendDy = point.y - mid.y;
+      setModel(next);
+    }
+    function toggleSwitch(compId){
+      const next = cloneModel();
+      const comp = next.components.find(c => c.id === compId);
+      if(!comp || comp.type !== 'switch') return;
+      comp.closed = !comp.closed;
+      setModel(next);
+    }
+    function deleteComponentFromModel(model, compId){
+      const next = {
+        components: model.components.map(c => ({ ...c })),
+        junctions: Object.fromEntries(
+          Object.entries(model.junctions).map(([id, junction]) => [
+            id,
+            { ...junction, terminalKeys:[...junction.terminalKeys] }
+          ])
+        )
+      };
+
+      const comp = next.components.find(c => c.id === compId);
+      if(!comp) return next;
+
+      ['a','b'].forEach(side => {
+        const key = terminalKey(compId, side);
+        const jid = side === 'a' ? comp.aJunctionId : comp.bJunctionId;
+        const junction = next.junctions[jid];
+        if(!junction) return;
+        junction.terminalKeys = junction.terminalKeys.filter(k => k !== key);
+        if(junction.terminalKeys.length === 0){
+          delete next.junctions[jid];
+        }
+      });
+
+      next.components = next.components.filter(c => c.id !== compId);
+      return next;
+    }
+
+    function deleteComponent(compId){
+      const next = deleteComponentFromModel(cloneModel(), compId);
+      if(state.selectedCompId === compId) state.selectedCompId = null;
+      if(state.hoveredCompId === compId) state.hoveredCompId = null;
+      setModel(next);
+    }
+    function detachTerminal(compId, side){
+      const comp = findComponent(compId);
+      if(!comp) return null;
+      const oldJid = getTerminalJunctionId(compId, side);
+      const oldJunction = getJunction(oldJid);
+      if(!oldJunction) return oldJid;
+
+      if(oldJunction.terminalKeys.length <= 1){
+        return oldJid;
+      }
+
+      const next = cloneModel();
+      const nextComp = next.components.find(c => c.id === compId);
+      const nextOldJunction = next.junctions[oldJid];
+      const key = terminalKey(compId, side);
+      const pos = getTerminalPosition(compId, side);
+      const newJid = uid('j');
+
+      nextOldJunction.terminalKeys = nextOldJunction.terminalKeys.filter(k => k !== key);
+      next.junctions[newJid] = {
+        id:newJid,
+        x:pos.x,
+        y:pos.y,
+        terminalKeys:[key]
+      };
+
+      if(side === 'a') nextComp.aJunctionId = newJid;
+      else nextComp.bJunctionId = newJid;
+
+      setModel(next);
+      return newJid;
+    }
+    function mergeJunctions(sourceJid, targetJid){
+      if(!sourceJid || !targetJid || sourceJid === targetJid) return;
+      const next = cloneModel();
+      const source = next.junctions[sourceJid];
+      const target = next.junctions[targetJid];
+      if(!source || !target) return;
+
+      next.components.forEach(comp => {
+        if(comp.aJunctionId === sourceJid) comp.aJunctionId = targetJid;
+        if(comp.bJunctionId === sourceJid) comp.bJunctionId = targetJid;
+      });
+
+      target.terminalKeys = [...target.terminalKeys, ...source.terminalKeys];
+      delete next.junctions[sourceJid];
+      setModel(next);
+    }
+    function findNearestSnapTarget(point, sourceJid, forbiddenTerminalKey){
+      let best = null;
+      let bestDist = Infinity;
+      for(const junction of Object.values(state.junctions)){
+        if(junction.id === sourceJid) continue;
+        if(forbiddenTerminalKey && junction.terminalKeys.includes(forbiddenTerminalKey)) continue;
+        const d = distance(point, junction);
+        if(d < SNAP_RADIUS && d < bestDist){
+          best = junction.id;
+          bestDist = d;
+        }
+      }
+      return best;
+    }
+    function getWireControlPoint(comp){
+      const a = getTerminalPosition(comp.id, 'a');
+      const b = getTerminalPosition(comp.id, 'b');
+      const mid = midpoint(a, b);
+      return { x: mid.x + (comp.bendDx || 0), y: mid.y + (comp.bendDy || 0) };
+    }
+    function buildWirePath(a, c, b){
+      return `M ${a.x} ${a.y} Q ${c.x} ${c.y} ${b.x} ${b.y}`;
+    }
+    function isComponentAtJunction(compId, junctionId){
+      const comp = findComponent(compId);
+      if(!comp) return false;
+      return comp.aJunctionId === junctionId || comp.bJunctionId === junctionId;
+    }
+    function getComponentSideAtJunction(compId, junctionId){
+      const comp = findComponent(compId);
+      if(!comp) return null;
+      if(comp.aJunctionId === junctionId) return 'a';
+      if(comp.bJunctionId === junctionId) return 'b';
+      return null;
+    }
+    function chooseComponentForJunction(junctionId){
+      const junction = getJunction(junctionId);
+      if(!junction) return null;
+
+      const ids = junction.terminalKeys.map(key => parseTerminalKey(key).compId);
+
+      if(state.selectedCompId && ids.includes(state.selectedCompId)) return state.selectedCompId;
+      if(state.hoveredCompId && ids.includes(state.hoveredCompId)) return state.hoveredCompId;
+
+      const wireId = ids.find(id => findComponent(id)?.type === 'wire');
+      if(wireId) return wireId;
+
+      return ids[ids.length - 1] || null;
+    }
+    function solveLinearSystem(matrix, vector){
+      const n = matrix.length;
+      const A = matrix.map((row, i) => [...row, vector[i]]);
+
+      for(let col=0; col<n; col++){
+        let pivot = col;
+        for(let row=col+1; row<n; row++){
+          if(Math.abs(A[row][col]) > Math.abs(A[pivot][col])) pivot = row;
+        }
+        if(Math.abs(A[pivot][col]) < 1e-10) throw new Error('Singulär');
+
+        [A[col], A[pivot]] = [A[pivot], A[col]];
+        const pivotVal = A[col][col];
+        for(let j=col; j<=n; j++) A[col][j] /= pivotVal;
+
+        for(let row=0; row<n; row++){
+          if(row === col) continue;
+          const factor = A[row][col];
+          if(Math.abs(factor) < 1e-12) continue;
+          for(let j=col; j<=n; j++) A[row][j] -= factor * A[col][j];
+        }
+      }
+
+      return A.map(row => row[n]);
+    }
+    function buildSimulation(){
+      const currents = Object.fromEntries(state.components.map(c => [c.id, 0]));
+      const active = {};
+
+      const junctionIds = Object.keys(state.junctions);
+      const parent = Object.fromEntries(junctionIds.map(id => [id, id]));
+
+      function ufFind(x){
+        let cur = x;
+        while(parent[cur] !== cur){
+          parent[cur] = parent[parent[cur]];
+          cur = parent[cur];
+        }
+        return cur;
+      }
+
+      function ufUnion(a, b){
+        const ra = ufFind(a);
+        const rb = ufFind(b);
+        if(ra !== rb) parent[rb] = ra;
+      }
+
+      for(const comp of state.components){
+        if(comp.type === 'wire' || (comp.type === 'switch' && comp.closed)){
+          if(comp.aJunctionId && comp.bJunctionId){
+            ufUnion(comp.aJunctionId, comp.bJunctionId);
+          }
+        }
+      }
+
+      const nodeOfJunction = {};
+      junctionIds.forEach(id => { nodeOfJunction[id] = ufFind(id); });
+      const nodeIds = [...new Set(Object.values(nodeOfJunction))];
+
+      const resistors = [];
+      const sources = [];
+      const superAdj = {};
+
+      function addSuperAdj(a, b){
+        if(!superAdj[a]) superAdj[a] = new Set();
+        if(!superAdj[b]) superAdj[b] = new Set();
+        superAdj[a].add(b);
+        superAdj[b].add(a);
+      }
+
+      for(const comp of state.components){
+        if(comp.type === 'wire'){
+          active[comp.id] = false;
+          continue;
+        }
+
+        if(comp.type === 'switch' && !comp.closed){
+          currents[comp.id] = 0;
+          active[comp.id] = false;
+          continue;
+        }
+
+        const aNode = nodeOfJunction[comp.aJunctionId];
+        const bNode = nodeOfJunction[comp.bJunctionId];
+
+        if(aNode == null || bNode == null){
+          currents[comp.id] = 0;
+          active[comp.id] = false;
+          continue;
+        }
+
+        if(comp.type === 'switch' && comp.closed){
+          active[comp.id] = false;
+          continue;
+        }
+
+        if(aNode === bNode){
+          currents[comp.id] = 0;
+          active[comp.id] = false;
+          continue;
+        }
+
+        addSuperAdj(aNode, bNode);
+
+        if(comp.type === 'battery'){
+          sources.push({ compId:comp.id, a:aNode, b:bNode, v:BATTERY_VOLTAGE });
+        }else{
+          resistors.push({ compId:comp.id, a:aNode, b:bNode, r:LOAD_RESISTANCE });
+        }
+      }
+
+      const seen = new Set();
+      const groups = [];
+
+      for(const nodeId of nodeIds){
+        if(seen.has(nodeId)) continue;
+        const stack = [nodeId];
+        const group = [];
+        seen.add(nodeId);
+        while(stack.length){
+          const cur = stack.pop();
+          group.push(cur);
+          (superAdj[cur] || []).forEach(n => {
+            if(!seen.has(n)){
+              seen.add(n);
+              stack.push(n);
+            }
+          });
+        }
+        groups.push(group);
+      }
+
+      const activeNodes = new Set();
+
+      for(const group of groups){
+        const nodeSet = new Set(group);
+        const groupResistors = resistors.filter(r => nodeSet.has(r.a) && nodeSet.has(r.b));
+        const groupSources = sources.filter(s => nodeSet.has(s.a) && nodeSet.has(s.b));
+
+        if(groupSources.length === 0 || groupResistors.length === 0) continue;
+
+        const ground = group[0];
+        const nonGround = group.filter(n => n !== ground);
+        const nodeIndex = Object.fromEntries(nonGround.map((n, i) => [n, i]));
+        const n = nonGround.length;
+        const m = groupSources.length;
+        const size = n + m;
+        if(size === 0) continue;
+
+        const A = Array.from({ length:size }, () => Array(size).fill(0));
+        const z = Array(size).fill(0);
+
+        function addConductance(a, b, g){
+          const ai = a === ground ? null : nodeIndex[a];
+          const bi = b === ground ? null : nodeIndex[b];
+          if(ai !== null) A[ai][ai] += g;
+          if(bi !== null) A[bi][bi] += g;
+          if(ai !== null && bi !== null){
+            A[ai][bi] -= g;
+            A[bi][ai] -= g;
+          }
+        }
+
+        groupResistors.forEach(r => addConductance(r.a, r.b, 1 / r.r));
+
+        groupSources.forEach((src, k) => {
+          const row = n + k;
+          const ai = src.a === ground ? null : nodeIndex[src.a];
+          const bi = src.b === ground ? null : nodeIndex[src.b];
+          if(ai !== null){
+            A[ai][row] += 1;
+            A[row][ai] += 1;
+          }
+          if(bi !== null){
+            A[bi][row] -= 1;
+            A[row][bi] -= 1;
+          }
+          z[row] = src.v;
+        });
+
+        let solution;
+        try{
+          solution = solveLinearSystem(A, z);
+        }catch{
+          continue;
+        }
+
+        const voltages = { [ground]:0 };
+        nonGround.forEach(node => { voltages[node] = solution[nodeIndex[node]]; });
+
+        groupResistors.forEach(r => {
+          const va = voltages[r.a] ?? 0;
+          const vb = voltages[r.b] ?? 0;
+          currents[r.compId] = (va - vb) / r.r;
+          if(Math.abs(currents[r.compId]) > ACTIVE_CURRENT){
+            active[r.compId] = true;
+            activeNodes.add(r.a);
+            activeNodes.add(r.b);
+          }
+        });
+
+        groupSources.forEach((src, k) => {
+          currents[src.compId] = solution[n + k] ?? 0;
+          if(Math.abs(currents[src.compId]) > ACTIVE_CURRENT){
+            active[src.compId] = true;
+            activeNodes.add(src.a);
+            activeNodes.add(src.b);
+          }
+        });
+      }
+
+      for(const comp of state.components){
+        if(comp.type === 'wire'){
+          const node = nodeOfJunction[comp.aJunctionId];
+          active[comp.id] = !!node && activeNodes.has(node);
+          continue;
+        }
+        if(comp.type === 'switch' && comp.closed){
+          const node = nodeOfJunction[comp.aJunctionId];
+          active[comp.id] = !!node && activeNodes.has(node);
+          continue;
+        }
+        if(active[comp.id] == null){
+          active[comp.id] = Math.abs(currents[comp.id] || 0) > ACTIVE_CURRENT;
+        }
+      }
+
+      return { currents, active };
+    }
+    function bodyStroke(comp, isActive){
+      if(comp.type === 'switch' && !comp.closed) return '#ef4444';
+      if(comp.type === 'lamp') return isActive ? '#f59e0b' : '#475569';
+      if(comp.type === 'fan') return isActive ? '#10b981' : '#475569';
+      if(comp.type === 'bell') return isActive ? '#8b5cf6' : '#475569';
+      if(comp.type === 'battery') return isActive ? '#14b8a6' : '#475569';
+      if(comp.type === 'wire') return isActive ? '#16a34a' : '#64748b';
+      return isActive ? '#16a34a' : '#475569';
+    }
+    function selectionColor(compId){
+      if(state.selectedCompId === compId) return '#2563eb';
+      if(state.hoveredCompId === compId) return '#38bdf8';
+      return null;
+    }
+    function createSvg(tag, attrs = {}, children = []){
+      const el = document.createElementNS(SVG_NS, tag);
+      Object.entries(attrs).forEach(([k,v]) => {
+        if(v !== undefined && v !== null) el.setAttribute(k, String(v));
+      });
+      children.forEach(child => el.appendChild(child));
+      return el;
+    }
+    function pointFromEvent(e){
+      const rect = app.getBoundingClientRect();
+      return { x:e.clientX - rect.left, y:e.clientY - rect.top };
+    }
+    function trashRect(){
+      const r = trash.getBoundingClientRect();
+      const a = app.getBoundingClientRect();
+      return { x:r.left-a.left, y:r.top-a.top, w:r.width, h:r.height };
+    }
+    function inTrash(p){
+      const t = trashRect();
+      return p.x >= t.x && p.x <= t.x + t.w && p.y >= t.y && p.y <= t.y + t.h;
+    }
+    function capturePointer(pointerId){
+      if(pointerId == null) return;
+      try{ workspace.setPointerCapture(pointerId); }catch{}
+    }
+    function releasePointer(pointerId){
+      if(pointerId == null) return;
+      try{
+        if(workspace.hasPointerCapture && workspace.hasPointerCapture(pointerId)){
+          workspace.releasePointerCapture(pointerId);
+        }
+      }catch{}
+    }
+    function captureModelSnapshot(){
+      return {
+        components: state.components.map(comp => ({ ...comp })),
+        junctions: Object.fromEntries(
+          Object.entries(state.junctions).map(([id, junction]) => [
+            id,
+            { ...junction, terminalKeys:[...junction.terminalKeys] }
+          ])
+        )
+      };
+    }
+    function restoreBeforeDragAndDelete(compId, snapshot){
+      const baseModel = snapshot || captureModelSnapshot();
+      const next = deleteComponentFromModel(baseModel, compId);
+      if(state.selectedCompId === compId) state.selectedCompId = null;
+      if(state.hoveredCompId === compId) state.hoveredCompId = null;
+      setModel(next);
+    }
+    function finishDrag(pointerId){
+      state.drag = null;
+      state.hoverTrash = false;
+      state.snapTarget = null;
+      releasePointer(pointerId);
+      render();
+    }
+    function setHover(compId){
+      state.hoveredCompId = compId;
+      render();
+    }
+    function clearHover(compId){
+      if(state.hoveredCompId === compId){
+        state.hoveredCompId = null;
+        render();
+      }
+    }
+    function beginComponentDrag(comp, e){
+      e.preventDefault();
+      e.stopPropagation();
+      capturePointer(e.pointerId);
+      state.selectedCompId = comp.id;
+      const p = pointFromEvent(e);
+      state.drag = {
+        kind:'component',
+        compId:comp.id,
+        compType:comp.type,
+        compIds: isRigidComponent(comp) ? getRigidGroupForComponent(comp.id) : [comp.id],
+        startModel: captureModelSnapshot(),
+        start:p,
+        last:p,
+        moved:false,
+        pointerId:e.pointerId ?? null
+      };
+      render();
+    }
+    function beginWireBendDrag(comp, e){
+      e.preventDefault();
+      e.stopPropagation();
+      capturePointer(e.pointerId);
+      state.selectedCompId = comp.id;
+      const p = pointFromEvent(e);
+      state.drag = {
+        kind:'wire-bend',
+        compId:comp.id,
+        startModel: captureModelSnapshot(),
+        start:p,
+        last:p,
+        moved:false,
+        pointerId:e.pointerId ?? null
+      };
+      render();
+    }
+    function beginWireEndDrag(compId, side, e){
+      e.preventDefault();
+      e.stopPropagation();
+      capturePointer(e.pointerId);
+      state.selectedCompId = compId;
+      const newJid = detachTerminal(compId, side);
+      const p = pointFromEvent(e);
+      state.drag = {
+        kind:'wire-end',
+        compId,
+        side,
+        junctionId:newJid,
+        forbiddenTerminalKey: terminalKey(compId, getOtherSide(side)),
+        startModel: captureModelSnapshot(),
+        start:p,
+        last:p,
+        moved:false,
+        pointerId:e.pointerId ?? null
+      };
+      state.snapTarget = findNearestSnapTarget(p, newJid, state.drag.forbiddenTerminalKey);
+      render();
+    }
+    function beginRigidRotateDrag(compId, side, e){
+      e.preventDefault();
+      e.stopPropagation();
+      capturePointer(e.pointerId);
+      state.selectedCompId = compId;
+      const comp = findComponent(compId);
+      if(!comp) return;
+      const movingJunctionId = detachTerminal(compId, side);
+      const fixedSide = getOtherSide(side);
+      const fixedPoint = getTerminalPosition(compId, fixedSide);
+      const p = pointFromEvent(e);
+      state.drag = {
+        kind:'rigid-rotate',
+        compId,
+        side,
+        movingJunctionId,
+        fixedPoint,
+        radius: componentLength(findComponent(compId)),
+        forbiddenTerminalKey: terminalKey(compId, fixedSide),
+        startModel: captureModelSnapshot(),
+        start:p,
+        last:p,
+        moved:false,
+        pointerId:e.pointerId ?? null
+      };
+      const constrained = clampAnglePoint(fixedPoint, p, state.drag.radius);
+      moveJunctionTo(movingJunctionId, constrained.x, constrained.y);
+      state.snapTarget = findNearestSnapTarget(constrained, movingJunctionId, state.drag.forbiddenTerminalKey);
+      render();
+    }
+    function beginJunctionDrag(junctionId, e){
+      const compId = chooseComponentForJunction(junctionId);
+      if(!compId) return;
+      const comp = findComponent(compId);
+      if(!comp) return;
+      const side = getComponentSideAtJunction(compId, junctionId);
+      if(!side) return;
+      if(comp.type === 'wire') beginWireEndDrag(compId, side, e);
+      else beginRigidRotateDrag(compId, side, e);
+    }
+    function componentCenter(comp){
+      return midpoint(getTerminalPosition(comp.id, 'a'), getTerminalPosition(comp.id, 'b'));
+    }
+    function wireTangentAtStart(a, c){
+      const dx = c.x - a.x;
+      const dy = c.y - a.y;
+      return normalize(dx, dy);
+    }
+    function wireTangentAtEnd(c, b){
+      const dx = b.x - c.x;
+      const dy = b.y - c.y;
+      return normalize(dx, dy);
+    }
+    function componentGlow(compId){
+      const color = selectionColor(compId);
+      return color ? color : null;
+    }
+    function renderRigidComponent(comp){
+      const a = getTerminalPosition(comp.id, 'a');
+      const b = getTerminalPosition(comp.id, 'b');
+      const center = midpoint(a,b);
+      const len = Math.max(1, distance(a,b));
+      const angle = Math.atan2(b.y-a.y, b.x-a.x) * 180 / Math.PI;
+      const active = !!state.simulation.active[comp.id];
+      const stroke = bodyStroke(comp, active);
+      const thick = active ? 6 : 4;
+      const leadCut = Math.min(26, len / 2 - 10);
+      const sel = componentGlow(comp.id);
+      const g = createSvg('g', { transform:`translate(${center.x} ${center.y}) rotate(${angle})` });
+
+      g.appendChild(createSvg('line', {
+        x1:-len/2, y1:0, x2:-leadCut, y2:0, stroke,
+        'stroke-width':thick, 'stroke-linecap':'round'
+      }));
+      g.appendChild(createSvg('line', {
+        x1:leadCut, y1:0, x2:len/2, y2:0, stroke,
+        'stroke-width':thick, 'stroke-linecap':'round'
+      }));
+
+      if(comp.type === 'battery'){
+        g.appendChild(createSvg('line', { x1:-10, y1:-16, x2:-10, y2:16, stroke, 'stroke-width':4, 'stroke-linecap':'round' }));
+        g.appendChild(createSvg('line', { x1:10, y1:-24, x2:10, y2:24, stroke, 'stroke-width':4, 'stroke-linecap':'round' }));
+        const plus = createSvg('text', { x:-24, y:-10, 'font-size':16, fill:'#0f172a', 'text-anchor':'middle' });
+        plus.textContent = '+';
+        const minus = createSvg('text', { x:24, y:-10, 'font-size':16, fill:'#0f172a', 'text-anchor':'middle' });
+        minus.textContent = '−';
+        g.appendChild(plus);
+        g.appendChild(minus);
+      }
+
+      if(comp.type === 'lamp'){
+        g.appendChild(createSvg('circle', { cx:0, cy:0, r:20, fill:active ? '#fde68a' : '#ffffff', stroke, 'stroke-width':3 }));
+        g.appendChild(createSvg('path', {
+          d:'M -10 7 L -4 -5 L 4 5 L 10 -7',
+          fill:'none', stroke, 'stroke-width':2.5, 'stroke-linecap':'round', 'stroke-linejoin':'round'
+        }));
+        if(active){
+          g.appendChild(createSvg('circle', { cx:0, cy:0, r:28, fill:'none', stroke:'#fcd34d', 'stroke-width':4, opacity:.35 }));
+        }
+      }
+
+      if(comp.type === 'fan'){
+        g.appendChild(createSvg('circle', { cx:0, cy:0, r:20, fill:'#ffffff', stroke, 'stroke-width':3 }));
+        const rotor = createSvg('g');
+        if(active){
+          const anim = createSvg('animateTransform', {
+            attributeName:'transform',
+            type:'rotate',
+            from:'0 0 0',
+            to:'360 0 0',
+            dur:'1s',
+            repeatCount:'indefinite'
+          });
+          rotor.appendChild(anim);
+        }
+        rotor.appendChild(createSvg('path', { d:'M 0 -14 C 8 -18 16 -10 10 -2 C 7 2 2 1 0 0 Z', fill:active ? '#6ee7b7' : '#cbd5e1', stroke, 'stroke-width':1.8 }));
+        rotor.appendChild(createSvg('path', { d:'M 12 8 C 17 0 11 -10 3 -7 C -1 -5 -1 0 0 2 Z', fill:active ? '#6ee7b7' : '#cbd5e1', stroke, 'stroke-width':1.8 }));
+        rotor.appendChild(createSvg('path', { d:'M -12 8 C -17 0 -11 -10 -3 -7 C 1 -5 1 0 0 2 Z', fill:active ? '#6ee7b7' : '#cbd5e1', stroke, 'stroke-width':1.8 }));
+        g.appendChild(rotor);
+        g.appendChild(createSvg('circle', { cx:0, cy:0, r:3.5, fill:stroke }));
+      }
+
+      if(comp.type === 'bell'){
+        const bell = createSvg('g');
+        if(active){
+          const anim = createSvg('animateTransform', {
+            attributeName:'transform',
+            type:'rotate',
+            values:'0 0 -10; 10 0 -10; 0 0 -10; -10 0 -10; 0 0 -10',
+            dur:'0.8s',
+            repeatCount:'indefinite'
+          });
+          bell.appendChild(anim);
+        }
+        bell.appendChild(createSvg('path', {
+          d:'M -14 6 Q -14 -12 0 -16 Q 14 -12 14 6 L 18 12 L -18 12 Z',
+          fill:active ? '#ede9fe' : '#ffffff', stroke, 'stroke-width':3, 'stroke-linejoin':'round'
+        }));
+        bell.appendChild(createSvg('circle', { cx:0, cy:15, r:3.5, fill:stroke }));
+        bell.appendChild(createSvg('line', { x1:-8, y1:18, x2:8, y2:18, stroke, 'stroke-width':3, 'stroke-linecap':'round' }));
+        g.appendChild(bell);
+        if(active){
+          g.appendChild(createSvg('path', { d:'M -24 -6 Q -31 0 -24 6', fill:'none', stroke:'#8b5cf6', 'stroke-width':2.5, 'stroke-linecap':'round' }));
+          g.appendChild(createSvg('path', { d:'M 24 -6 Q 31 0 24 6', fill:'none', stroke:'#8b5cf6', 'stroke-width':2.5, 'stroke-linecap':'round' }));
+        }
+      }
+
+      if(comp.type === 'switch'){
+        g.appendChild(createSvg('circle', { cx:-12, cy:0, r:4, fill:stroke }));
+        g.appendChild(createSvg('circle', { cx:12, cy:0, r:4, fill:stroke }));
+        g.appendChild(createSvg('line', {
+          x1:-12, y1:0, x2: comp.closed ? 12 : 8, y2: comp.closed ? 0 : -12,
+          stroke, 'stroke-width':4, 'stroke-linecap':'round'
+        }));
+      }
+
+      if(sel){
+        g.appendChild(createSvg('rect', {
+          x:-44, y:-38, width:88, height:76, rx:18,
+          fill:'none', stroke:sel, 'stroke-width':3, opacity:.9
+        }));
+      }
+
+      const hit = createSvg('rect', {
+        x:-48, y:-40, width:96, height:80, rx:18, fill:'transparent', class:'ghost-hit'
+      });
+      hit.addEventListener('pointerdown', ev => beginComponentDrag(comp, ev));
+      hit.addEventListener('pointerenter', () => setHover(comp.id));
+      hit.addEventListener('pointerleave', () => clearHover(comp.id));
+      g.appendChild(hit);
+
+      workspace.appendChild(g);
+    }
+    function renderWire(comp){
+      const a = getTerminalPosition(comp.id, 'a');
+      const b = getTerminalPosition(comp.id, 'b');
+      const c = getWireControlPoint(comp);
+      const pathD = buildWirePath(a, c, b);
+      const active = !!state.simulation.active[comp.id];
+      const currentMag = Math.abs(state.simulation.currents[comp.id] || 0);
+      const sel = componentGlow(comp.id);
+      const tA = wireTangentAtStart(a, c);
+      const tB = wireTangentAtEnd(c, b);
+      const g = createSvg('g');
+
+      if(sel){
+        g.appendChild(createSvg('path', {
+          d:pathD, fill:'none', stroke:sel, 'stroke-width':18,
+          'stroke-linecap':'round', 'stroke-linejoin':'round', opacity:.35
+        }));
+      }
+
+      g.appendChild(createSvg('path', {
+        d:pathD, fill:'none', stroke: active ? '#14532d' : '#111827',
+        'stroke-width':13, 'stroke-linecap':'round', 'stroke-linejoin':'round',
+        opacity: currentMag < ACTIVE_CURRENT ? .78 : 1
+      }));
+      g.appendChild(createSvg('path', {
+        d:pathD, fill:'none', stroke: active ? '#4ade80' : '#6b7280',
+        'stroke-width':7, 'stroke-linecap':'round', 'stroke-linejoin':'round',
+        opacity: currentMag < ACTIVE_CURRENT ? .82 : 1
+      }));
+      g.appendChild(createSvg('path', {
+        d:pathD, fill:'none', stroke: active ? '#dcfce7' : '#cbd5e1',
+        'stroke-width':2.5, 'stroke-linecap':'round', 'stroke-linejoin':'round',
+        opacity:.8
+      }));
+
+      function plugAt(point, tangent){
+        const angle = Math.atan2(tangent.y, tangent.x) * 180 / Math.PI;
+        const plug = createSvg('g', { transform:`translate(${point.x} ${point.y}) rotate(${angle})` });
+        plug.appendChild(createSvg('rect', {
+          x:-8, y:-5, width:16, height:10, rx:4,
+          fill: active ? '#bbf7d0' : '#e2e8f0', stroke:'#334155', 'stroke-width':1.5
+        }));
+        plug.appendChild(createSvg('line', {
+          x1:-13, y1:0, x2:-8, y2:0, stroke:'#334155', 'stroke-width':2, 'stroke-linecap':'round'
+        }));
+        return plug;
+      }
+      g.appendChild(plugAt(a, tA));
+      g.appendChild(plugAt(b, { x:-tB.x, y:-tB.y }));
+
+      const hit = createSvg('path', {
+        d:pathD, fill:'none', stroke:'transparent', 'stroke-width':28,
+        'stroke-linecap':'round', 'stroke-linejoin':'round', class:'ghost-hit'
+      });
+      hit.addEventListener('pointerdown', ev => beginWireBendDrag(comp, ev));
+      hit.addEventListener('pointerenter', () => setHover(comp.id));
+      hit.addEventListener('pointerleave', () => clearHover(comp.id));
+      g.appendChild(hit);
+
+      workspace.appendChild(g);
+    }
+    function junctionActive(junction){
+      return junction.terminalKeys.some(key => state.simulation.active[parseTerminalKey(key).compId]);
+    }
+    function junctionSelected(junction){
+      if(!state.selectedCompId) return false;
+      return junction.terminalKeys.some(key => parseTerminalKey(key).compId === state.selectedCompId);
+    }
+    function render(){
+      state.size = { width: app.clientWidth, height: app.clientHeight };
+      workspace.setAttribute('viewBox', `0 0 ${state.size.width} ${state.size.height}`);
+      workspace.innerHTML = '';
+      trash.classList.toggle('active', !!state.hoverTrash);
+
+      for(const comp of state.components){
+        if(comp.type === 'wire') renderWire(comp);
+        else renderRigidComponent(comp);
+      }
+
+      for(const junction of Object.values(state.junctions)){
+        const active = junctionActive(junction);
+        const selected = junctionSelected(junction);
+        const stroke = selected ? '#2563eb' : (active ? '#16a34a' : '#475569');
+        const fill = selected ? '#dbeafe' : (active ? '#dcfce7' : '#ffffff');
+        const ring = selected ? '#93c5fd' : null;
+        const circleGroup = createSvg('g');
+
+        if(ring){
+          circleGroup.appendChild(createSvg('circle', {
+            cx:junction.x, cy:junction.y, r:18, fill:'none',
+            stroke:ring, 'stroke-width':4, opacity:.55
+          }));
+        }
+
+        circleGroup.appendChild(createSvg('circle', {
+          cx:junction.x, cy:junction.y, r:HANDLE_RADIUS,
+          fill, stroke, 'stroke-width':3
+        }));
+
+        const hit = createSvg('circle', {
+          cx:junction.x, cy:junction.y, r:20, fill:'transparent', class:'ghost-hit'
+        });
+        hit.addEventListener('pointerdown', ev => beginJunctionDrag(junction.id, ev));
+        hit.addEventListener('pointerenter', () => {
+          const compId = chooseComponentForJunction(junction.id);
+          if(compId) setHover(compId);
+        });
+        hit.addEventListener('pointerleave', () => {
+          if(state.hoveredCompId && isComponentAtJunction(state.hoveredCompId, junction.id)){
+            state.hoveredCompId = null;
+            render();
+          }
+        });
+        circleGroup.appendChild(hit);
+        workspace.appendChild(circleGroup);
+      }
+
+      if(state.snapTarget && state.junctions[state.snapTarget]){
+        const j = state.junctions[state.snapTarget];
+        workspace.appendChild(createSvg('circle', {
+          cx:j.x, cy:j.y, r:20, fill:'none', stroke:'#0ea5e9',
+          'stroke-width':3, 'stroke-dasharray':'6 5'
+        }));
+      }
+    }
+    function onPointerMove(e){
+      if(state.paletteDrag){
+        if(state.paletteDrag.pointerId == null || e.pointerId == null || e.pointerId === state.paletteDrag.pointerId){
+          e.preventDefault();
+          updatePaletteGhostPosition(pointFromEvent(e));
+        }
+      }
+
+      if(!state.drag) return;
+      if(state.drag.pointerId != null && e.pointerId != null && e.pointerId !== state.drag.pointerId) return;
+      e.preventDefault();
+      const p = pointFromEvent(e);
+
+      if(state.drag.kind === 'component'){
+        const dx = p.x - state.drag.last.x;
+        const dy = p.y - state.drag.last.y;
+        state.drag.last = p;
+        if(Math.hypot(p.x - state.drag.start.x, p.y - state.drag.start.y) > 4) state.drag.moved = true;
+        translateRigidGroup(state.drag.compIds || [state.drag.compId], dx, dy);
+        state.hoverTrash = inTrash(p);
+        render();
+        return;
+      }
+
+      if(state.drag.kind === 'wire-bend'){
+        state.drag.last = p;
+        if(Math.hypot(p.x - state.drag.start.x, p.y - state.drag.start.y) > 4) state.drag.moved = true;
+        state.hoverTrash = inTrash(p);
+        setWireBendFromPoint(state.drag.compId, p);
+        render();
+        return;
+      }
+
+      if(state.drag.kind === 'wire-end'){
+        state.drag.last = p;
+        if(Math.hypot(p.x - state.drag.start.x, p.y - state.drag.start.y) > 4) state.drag.moved = true;
+        moveJunctionTo(state.drag.junctionId, p.x, p.y);
+        state.hoverTrash = false;
+        state.snapTarget = findNearestSnapTarget(p, state.drag.junctionId, state.drag.forbiddenTerminalKey);
+        render();
+        return;
+      }
+
+      if(state.drag.kind === 'rigid-rotate'){
+        state.drag.last = p;
+        if(Math.hypot(p.x - state.drag.start.x, p.y - state.drag.start.y) > 4) state.drag.moved = true;
+        const constrained = clampAnglePoint(state.drag.fixedPoint, p, state.drag.radius);
+        moveJunctionTo(state.drag.movingJunctionId, constrained.x, constrained.y);
+        state.hoverTrash = false;
+        state.snapTarget = findNearestSnapTarget(constrained, state.drag.movingJunctionId, state.drag.forbiddenTerminalKey);
+        render();
+      }
+    }
+    function onPointerUp(e){
+      if(state.paletteDrag){
+        endPaletteDrag(e);
+      }
+      if(!state.drag) return;
+      if(state.drag.pointerId != null && e.pointerId != null && e.pointerId !== state.drag.pointerId) return;
+      e.preventDefault();
+      const pointerId = state.drag.pointerId;
+      const p = (e.clientX != null && e.clientY != null) ? pointFromEvent(e) : state.drag.last;
+
+      if(state.drag.kind === 'component'){
+        if(!state.drag.moved && state.drag.compType === 'switch'){
+          toggleSwitch(state.drag.compId);
+        }else if(inTrash(p)){
+          restoreBeforeDragAndDelete(state.drag.compId, state.drag.startModel);
+        }
+      }
+
+      if(state.drag.kind === 'wire-bend'){
+        if(inTrash(p)){
+          restoreBeforeDragAndDelete(state.drag.compId, state.drag.startModel);
+        }
+      }
+
+      if(state.drag.kind === 'wire-end'){
+        const target = findNearestSnapTarget(p, state.drag.junctionId, state.drag.forbiddenTerminalKey);
+        if(target) mergeJunctions(state.drag.junctionId, target);
+      }
+
+      if(state.drag.kind === 'rigid-rotate'){
+        const movingJ = getJunction(state.drag.movingJunctionId);
+        const endPoint = movingJ ? { x:movingJ.x, y:movingJ.y } : state.drag.last;
+        const target = findNearestSnapTarget(endPoint, state.drag.movingJunctionId, state.drag.forbiddenTerminalKey);
+        if(target) mergeJunctions(state.drag.movingJunctionId, target);
+      }
+
+      finishDrag(pointerId);
+    }
+    function addAtCenter(type){
+      const jitter = state.components.length % 6;
+      const x = Math.max(170, state.size.width / 2 - 90 + jitter * 18);
+      const y = Math.max(140, state.size.height / 2 - 40 + jitter * 18);
+      addComponent(type, x, y);
+    }
+
+    mountPaletteIcons();
+
+    toolbar.querySelectorAll('.tool-card[data-add]').forEach(card => {
+      card.addEventListener('pointerdown', ev => beginPaletteDrag(card.dataset.add, ev));
+    });
+
+    exportBtn.addEventListener('click', async () => {
+      await exportCurrentState();
+    });
+
+    importBtn.addEventListener('click', () => {
+      importInput.value = '';
+      importInput.click();
+    });
+
+    importInput.addEventListener('change', async () => {
+      const file = importInput.files && importInput.files[0];
+      if(!file) return;
+      try{
+        await importFromFile(file);
+      }catch(error){
+        console.error(error);
+        alert('Import fehlgeschlagen. Bitte eine gültige JSON-Datei verwenden.');
+      }finally{
+        importInput.value = '';
+      }
+    });
+
+    clearBtn.addEventListener('click', () => {
+      state.selectedCompId = null;
+      state.hoveredCompId = null;
+      setModel({ components:[], junctions:{} });
+      state.hoverTrash = false;
+      state.snapTarget = null;
+      render();
+    });
+
+    workspace.addEventListener('pointermove', onPointerMove, { passive:false });
+    workspace.addEventListener('pointerup', onPointerUp, { passive:false });
+    workspace.addEventListener('pointercancel', onPointerUp, { passive:false });
+    workspace.addEventListener('lostpointercapture', () => {
+      if(state.drag) finishDrag(state.drag.pointerId);
+    });
+    window.addEventListener('pointermove', onPointerMove, { passive:false });
+    window.addEventListener('pointerup', onPointerUp, { passive:false });
+    window.addEventListener('pointercancel', onPointerUp, { passive:false });
+    window.addEventListener('blur', () => {
+      if(state.drag) finishDrag(state.drag.pointerId);
+      if(state.paletteDrag){
+        paletteGhost.classList.remove('visible');
+        paletteGhost.innerHTML = '';
+        state.paletteDrag = null;
+      }
+      persistStateNow();
+    });
+    document.addEventListener('visibilitychange', () => {
+      if(document.hidden && state.drag) finishDrag(state.drag.pointerId);
+      if(document.hidden) persistStateNow();
+    });
+    window.addEventListener('pagehide', () => {
+      persistStateNow();
+    });
+    window.addEventListener('keydown', e => {
+      if(e.key === 'Escape' && state.drag) finishDrag(state.drag.pointerId);
+    });
+    window.addEventListener('resize', () => {
+      state.size = { width: window.innerWidth, height: window.innerHeight };
+      render();
+    });
+
+    async function initializeApp(){
+      const saved = await loadPersistedState();
+      if(saved && isValidImportedState(saved)){
+        applyImportedState(saved);
+        return;
+      }
+      setModel({ components:[], junctions:{} });
+    }
+
+    initializeApp();
+  </script>
+</body>
+</html>
